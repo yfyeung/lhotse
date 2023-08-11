@@ -2,6 +2,7 @@ from . import cut_transforms, input_strategies, sampling, signal_transforms
 from .cut_transforms import *
 from .dataloading import make_worker_init_fn
 from .diarization import DiarizationDataset
+from .discrete_signal_transforms import DiscretizedInputAugment
 from .input_strategies import AudioSamples, OnTheFlyFeatures, PrecomputedFeatures
 from .iterable_dataset import IterableDatasetWrapper
 from .sampling import *
@@ -11,7 +12,10 @@ from .source_separation import (
     PreMixedSourceSeparationDataset,
     SourceSeparationDataset,
 )
-from .speech_recognition import K2SpeechRecognitionDataset
+from .speech_recognition import (
+    DiscretizedInputSpeechRecognitionDataset,
+    K2SpeechRecognitionDataset,
+)
 from .speech_synthesis import SpeechSynthesisDataset
 from .surt import K2SurtDataset
 from .unsupervised import (

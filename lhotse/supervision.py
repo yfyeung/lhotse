@@ -466,8 +466,12 @@ class SupervisionSegment:
             super().__setattr__(key, value)
         else:
             custom = ifnone(self.custom, {})
-            custom[key] = value
-            self.custom = custom
+            if value is None:
+                custom.pop(key, None)
+            else:
+                custom[key] = value
+            if custom:
+                self.custom = custom
 
     def __getattr__(self, name: str) -> Any:
         """

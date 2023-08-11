@@ -154,8 +154,9 @@ def parse_utterance(
         text=text.strip(),
     )
     segment.discrete_tokens = discrete_tokens
+
     return recording, segment
 
 
 if __name__ == "__main__":
-    prepare_librispeech("/star-data/yifan/LibriSpeech", "/k2-dev/yangyifan/tmp/icefall-disc/egs/librispeech/ASR/download/DiscreteAudioToken/wavlm_large_l24_kms2000/out_quantized", "auto", ".", num_jobs=16)
+    prepare_librispeech("/star-data/yifan/LibriSpeech", "/k2-dev/yangyifan/icefall-disc/egs/librispeech/vq-wav2vec/download/DiscreteAudioToken/vq-wav2vec/out_quantized", "auto", ".", num_jobs=16)

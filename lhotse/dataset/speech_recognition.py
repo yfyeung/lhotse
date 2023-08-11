@@ -1,10 +1,12 @@
-from typing import Callable, Dict, List, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
+from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data.dataloader import DataLoader, default_collate
 
 from lhotse import validate
 from lhotse.cut import CutSet
+from lhotse.dataset.collation import collate_custom_field
 from lhotse.dataset.input_strategies import BatchIO, PrecomputedFeatures
 from lhotse.utils import compute_num_frames, ifnone
 from lhotse.workarounds import Hdf5MemoryIssueFix
@@ -199,6 +201,117 @@ class K2SpeechRecognitionDataset(torch.utils.data.Dataset):
             batch["supervisions"]["word_end"] = ends
 
         return batch
+
+
+class DiscretizedInputSpeechRecognitionDataset(torch.utils.data.Dataset):
+    """
+    The PyTorch Dataset for the speech recognition task that provides discrete audio tokens instead of audios/features.
+    In this implementation, there will always be a single channel.
+
+    Returns:
+
+    .. code-block::
+
+        {
+            'token': (B x Tokens) int tensor
+            'token_lens': (B, ) int tensor
+        }
+    """
+
+    def __init__(
+        self,
+        field: str,
+        num_tokens: int,
+        token_type: str,
+        frequency_size: Optional[int] = None,
+        input_transforms: List[Callable[[torch.Tensor], torch.Tensor]] = None,
+    ) -> None:
+        super().__init__()
+        self.field = field
+        self.num_tokens = num_tokens
+        self.frequency_size = frequency_size
+        self.token_type = token_type
+        self.input_transforms = ifnone(input_transforms, [])
+
+    def __getitem__(self, cuts: CutSet) -> Dict[str, Any]:
+        if self.token_type in ("wavlm", "hubert"):
+            tokens = []
+            token_lens = []
+            for c in cuts:
+                token = torch.tensor(
+                    list(map(int, c.discrete_tokens.split())), dtype=torch.int64
+                )
+                tokens.append(token)
+                token_lens.append(token.size(0))
+            tokens = pad_sequence(
+                tokens, batch_first=True, padding_value=self.num_tokens
+            )
+            token_lens = torch.tensor(token_lens, dtype=torch.int64)
+        elif self.token_type == "vq-wav2vec":
+            tokens_first = []
+            tokens_second = []
+            token_lens = []
+            for c in cuts:
+                raw_token = list(map(int, c.discrete_tokens.split()))
+                token_len = len(raw_token) >> 1
+                tokens_first.append(
+                    torch.tensor(raw_token[:token_len], dtype=torch.int64),
+                )
+                tokens_second.append(
+                    torch.tensor(raw_token[token_len:], dtype=torch.int64),
+                )
+                token_lens.append(token_len)
+            tokens = (
+                pad_sequence(
+                    tokens_first, batch_first=True, padding_value=self.num_tokens
+                ),
+                pad_sequence(
+                    tokens_second, batch_first=True, padding_value=self.num_tokens
+                ),
+            )
+            token_lens = torch.tensor(token_lens, dtype=torch.int64)
+
+        if self.token_type in ("wavlm", "hubert"):
+            tokens = (
+                torch.nn.functional.interpolate(
+                    tokens.unsqueeze(0).to(torch.float32),
+                    size=2 * int(tokens.size(1)),
+                    mode="nearest",
+                )
+                .squeeze(0)
+                .to(torch.int64)
+            )
+            token_lens = 2 * token_lens
+
+        data_dict = {}
+        for tnfm in self.input_transforms:
+            if tnfm.__class__.__name__ == "DiscretizedInputAugment":
+                if self.token_type in ("wavlm", "hubert"):
+                    tokens, frequency_masks = tnfm(
+                        tokens, self.num_tokens, self.frequency_size
+                    )
+                elif self.token_type == "vq-wav2vec":
+                    tokens, frequency_masks = zip(
+                        tnfm(tokens[0], self.num_tokens, self.frequency_size),
+                        tnfm(tokens[1], self.num_tokens, self.frequency_size),
+                    )
+
+                data_dict["frequency_masks"] = frequency_masks
+            else:
+                if self.token_type in ("wavlm", "hubert"):
+                    tokens = tnfm(tokens)
+                elif self.token_type == "vq-wav2vec":
+                    tokens = (tnfm(tokens[0]), tnfm(tokens[1]))
+
+        data_dict["cuts"] = cuts
+        data_dict["tokens"] = tokens
+        data_dict["token_lens"] = token_lens
+
+        return data_dict
+
+    def _validate(self, cuts: CutSet) -> None:
+        validate(cuts)
+        assert all(cut.has_recording for cut in cuts)
 
 
 def validate_for_asr(cuts: CutSet) -> None:
