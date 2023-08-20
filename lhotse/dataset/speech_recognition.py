@@ -1,3 +1,4 @@
+import math
 from typing import Any, Callable, Dict, List, Optional, Union
 
 import torch
@@ -248,26 +249,31 @@ class DiscretizedInputSpeechRecognitionDataset(torch.utils.data.Dataset):
             )
             token_lens = torch.tensor(token_lens, dtype=torch.int64)
         elif self.token_type == "vq-wav2vec":
-            tokens_first = []
-            tokens_second = []
+            tokens = []
             token_lens = []
             for c in cuts:
-                raw_token = list(map(int, c.discrete_tokens.split()))
-                token_len = len(raw_token) >> 1
-                tokens_first.append(
-                    torch.tensor(raw_token[:token_len], dtype=torch.int64),
+                token = torch.tensor(
+                    list(map(int, c.discrete_tokens.split())), dtype=torch.int64
                 )
-                tokens_second.append(
-                    torch.tensor(raw_token[token_len:], dtype=torch.int64),
-                )
+                token_len = len(token) >> 1
+                tokens.append(token.reshape(2, token_len).T)
                 token_lens.append(token_len)
-            tokens = (
-                pad_sequence(
-                    tokens_first, batch_first=True, padding_value=self.num_tokens
-                ),
-                pad_sequence(
-                    tokens_second, batch_first=True, padding_value=self.num_tokens
-                ),
+            tokens = pad_sequence(
+                tokens, batch_first=True, padding_value=self.num_tokens
+            )
+            token_lens = torch.tensor(token_lens, dtype=torch.int64)
+        elif self.token_type == "encodec":
+            tokens = []
+            token_lens = []
+            for c in cuts:
+                token = torch.tensor(
+                    list(map(int, c.discrete_tokens.split())), dtype=torch.int64
+                )
+                token_len = len(token) >> 3
+                tokens.append(token.reshape(8, token_len).T)
+                token_lens.append(token_len)
+            tokens = pad_sequence(
+                tokens, batch_first=True, padding_value=self.num_tokens
             )
             token_lens = torch.tensor(token_lens, dtype=torch.int64)
 
@@ -275,33 +281,34 @@ class DiscretizedInputSpeechRecognitionDataset(torch.utils.data.Dataset):
             tokens = (
                 torch.nn.functional.interpolate(
                     tokens.unsqueeze(0).to(torch.float32),
-                    size=2 * int(tokens.size(1)),
+                    size=int(tokens.size(1)) * 2,
                     mode="nearest",
                 )
                 .squeeze(0)
                 .to(torch.int64)
             )
-            token_lens = 2 * token_lens
+            token_lens = token_lens * 2
+        elif self.token_type == "encodec":
+            tokens = (
+                torch.nn.functional.interpolate(
+                    tokens.unsqueeze(0).to(torch.float32),
+                    size=(math.ceil(tokens.size(1) * 4 / 3), 8),
+                    mode="nearest",
+                )
+                .squeeze(0)
+                .to(torch.int64)
+            )
+            token_lens = (tokens[:, :, 0] != self.num_tokens).sum(1)
 
         data_dict = {}
         for tnfm in self.input_transforms:
             if tnfm.__class__.__name__ == "DiscretizedInputAugment":
-                if self.token_type in ("wavlm", "hubert"):
-                    tokens, frequency_masks = tnfm(
-                        tokens, self.num_tokens, self.frequency_size
-                    )
-                elif self.token_type == "vq-wav2vec":
-                    tokens, frequency_masks = zip(
-                        tnfm(tokens[0], self.num_tokens, self.frequency_size),
-                        tnfm(tokens[1], self.num_tokens, self.frequency_size),
-                    )
-
+                tokens, frequency_masks = tnfm(
+                    tokens, self.num_tokens, self.frequency_size
+                )
                 data_dict["frequency_masks"] = frequency_masks
             else:
-                if self.token_type in ("wavlm", "hubert"):
-                    tokens = tnfm(tokens)
-                elif self.token_type == "vq-wav2vec":
-                    tokens = (tnfm(tokens[0]), tnfm(tokens[1]))
+                tokens = tnfm(tokens)
 
         data_dict["cuts"] = cuts
         data_dict["tokens"] = tokens

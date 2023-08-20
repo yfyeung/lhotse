@@ -26,6 +26,7 @@ class DiscretizedInputAugment(torch.nn.Module):
 
     def __init__(
         self,
+        token_type: str,
         time_warp_factor: Optional[int] = 80,
         num_token_masks: int = 2,
         tokens_mask_size: int = 27,
@@ -57,6 +58,7 @@ class DiscretizedInputAugment(torch.nn.Module):
         assert num_frame_masks >= 0
         assert tokens_mask_size > 0
         assert frames_mask_size > 0
+        self.token_type = token_type
         self.time_warp_factor = time_warp_factor
         self.num_token_masks = num_token_masks
         self.tokens_mask_size = tokens_mask_size
@@ -90,9 +92,16 @@ class DiscretizedInputAugment(torch.nn.Module):
             the start frame index, and the number of frames for each segment.
         :return: an augmented tensor of shape ``(B, T)``.
         """
-        assert len(tokens.shape) == 2, (
-            "SpecAugment only supports batches of " "single-channel token matrices."
-        )
+        if self.token_type in ("wavlm", "hubert"):
+            assert len(tokens.shape) == 2, (
+                "SpecAugment only supports batches of " "single-channel token matrices."
+            )
+        elif self.token_type == "vq-wav2vec":
+            assert len(tokens.shape) == 3
+            assert tokens.shape[2] == 2
+        elif self.token_type == "encodec":
+            assert len(tokens.shape) == 3
+            assert tokens.shape[2] == 8
 
         tokens = tokens.clone()
         frequency_masks = []
@@ -145,7 +154,6 @@ class DiscretizedInputAugment(torch.nn.Module):
             )
             # Frequency masking
             frequency_mask = generate_frequency_mask(
-                tokens,
                 frequency_size=frequency_size,
                 mask_size=self.tokens_mask_size,
                 mask_times=self.num_token_masks,
@@ -212,7 +220,6 @@ def time_mask(
 
 
 def generate_frequency_mask(
-    tokens: torch.Tensor,
     frequency_size: int,
     mask_size: int,
     mask_times: int,
@@ -221,7 +228,6 @@ def generate_frequency_mask(
     Generate Frequency mask.
     Frequency and Time masking as described in the SpecAugment paper.
 
-    :param tokens: input tensor of shape ``(T)``
     :frequence_size: the size of frequency.
     :mask_size: the width size for masking.
     :mask_times: the number of masking regions.
@@ -257,12 +263,12 @@ def time_warp(tokens: torch.Tensor, factor: int) -> torch.Tensor:
     tokens = tokens.unsqueeze(0).unsqueeze(0).to(torch.float32)
     left = torch.nn.functional.interpolate(
         tokens[:, :, :center],
-        size=warped,
+        size=warped if len(tokens.shape) == 1 else (warped, tokens.shape[1]),
         mode="nearest",
     )
     right = torch.nn.functional.interpolate(
         tokens[:, :, center:],
-        size=t - warped,
+        size=t - warped if len(tokens.shape) == 1 else (t - warped, tokens.shape[1]),
         mode="nearest",
     )
     return torch.cat((left, right), dim=2).squeeze(0).squeeze(0).to(torch.int64)

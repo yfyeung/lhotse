@@ -159,4 +159,4 @@ def parse_utterance(
 
 
 if __name__ == "__main__":
-    prepare_librispeech("/star-data/yifan/LibriSpeech", "/k2-dev/yangyifan/icefall-disc/egs/librispeech/vq-wav2vec/download/DiscreteAudioToken/vq-wav2vec/out_quantized", "auto", ".", num_jobs=16)
+    prepare_librispeech("/star-data/yifan/LibriSpeech", "/k2-dev/yangyifan/icefall-disc/egs/librispeech/encodec/download/DiscreteAudioToken/encodec/out_quantized", "auto", ".", num_jobs=16)
