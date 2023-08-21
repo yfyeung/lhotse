@@ -263,12 +263,12 @@ def time_warp(tokens: torch.Tensor, factor: int) -> torch.Tensor:
     tokens = tokens.unsqueeze(0).unsqueeze(0).to(torch.float32)
     left = torch.nn.functional.interpolate(
         tokens[:, :, :center],
-        size=warped if len(tokens.shape) == 1 else (warped, tokens.shape[1]),
+        size=warped if len(tokens.shape) == 3 else (warped, tokens.shape[3]),
         mode="nearest",
     )
     right = torch.nn.functional.interpolate(
         tokens[:, :, center:],
-        size=t - warped if len(tokens.shape) == 1 else (t - warped, tokens.shape[1]),
+        size=t - warped if len(tokens.shape) == 3 else (t - warped, tokens.shape[3]),
         mode="nearest",
     )
     return torch.cat((left, right), dim=2).squeeze(0).squeeze(0).to(torch.int64)
