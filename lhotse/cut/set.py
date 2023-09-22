@@ -33,6 +33,7 @@ from tqdm.auto import tqdm
 from typing_extensions import Literal
 
 from lhotse.audio import RecordingSet, null_result_on_audio_loading_error
+from lhotse.audio.utils import VideoInfo
 from lhotse.augmentation import AugmentFn
 from lhotse.cut.base import Cut
 from lhotse.cut.data import DataCut
@@ -55,7 +56,6 @@ from lhotse.utils import (
     TimeSpan,
     compute_num_frames,
     compute_num_samples,
-    deprecated,
     exactly_one_not_null,
     fastcopy,
     ifnone,
@@ -313,6 +313,7 @@ class CutSet(Serializable, AlgorithmMixin):
         features: Optional[FeatureSet] = None,
         output_path: Optional[Pathlike] = None,
         random_ids: bool = False,
+        tolerance: Seconds = 0.001,
         lazy: bool = False,
     ) -> "CutSet":
         """
@@ -332,6 +333,9 @@ class CutSet(Serializable, AlgorithmMixin):
         :param output_path: an optional path where the :class:`.CutSet` is stored.
         :param random_ids: boolean, should the cut IDs be randomized. By default, use the recording ID
             with a loop index and a channel idx, i.e. "{recording_id}-{idx}-{channel}")
+        :param tolerance: float, tolerance for supervision and feature segment boundary comparison.
+            By default, it's 1ms. Increasing this value can be helpful when importing Kaldi data
+            directories with precomputed features (typically 0.02 - 0.1 should be sufficient).
         :param lazy: boolean, when ``True``, output_path must be provided
         :return: a new :class:`.CutSet` instance.
         """
@@ -342,6 +346,7 @@ class CutSet(Serializable, AlgorithmMixin):
                 features=features,
                 output_path=output_path,
                 random_ids=random_ids,
+                tolerance=tolerance,
             )
         else:
             return create_cut_set_eager(
@@ -350,6 +355,7 @@ class CutSet(Serializable, AlgorithmMixin):
                 features=features,
                 output_path=output_path,
                 random_ids=random_ids,
+                tolerance=tolerance,
             )
 
     @staticmethod
@@ -979,7 +985,10 @@ class CutSet(Serializable, AlgorithmMixin):
         print(tabulate(speaker_stats, headers="firstrow", tablefmt="fancy_grid"))
 
     def split(
-        self, num_splits: int, shuffle: bool = False, drop_last: bool = False
+        self,
+        num_splits: int,
+        shuffle: bool = False,
+        drop_last: bool = False,
     ) -> List["CutSet"]:
         """
         Split the :class:`~lhotse.CutSet` into ``num_splits`` pieces of equal size.
@@ -995,7 +1004,10 @@ class CutSet(Serializable, AlgorithmMixin):
         return [
             CutSet.from_cuts(subset)
             for subset in split_sequence(
-                self, num_splits=num_splits, shuffle=shuffle, drop_last=drop_last
+                self,
+                num_splits=num_splits,
+                shuffle=shuffle,
+                drop_last=drop_last,
             )
         ]
 
@@ -1005,6 +1017,7 @@ class CutSet(Serializable, AlgorithmMixin):
         chunk_size: int,
         prefix: str = "",
         num_digits: int = 8,
+        start_idx: int = 0,
     ) -> List["CutSet"]:
         """
         Splits a manifest (either lazily or eagerly opened) into chunks, each
@@ -1022,6 +1035,7 @@ class CutSet(Serializable, AlgorithmMixin):
         :param chunk_size: the number of items in each chunk.
         :param prefix: the prefix of each manifest.
         :param num_digits: the width of ``split_idx``, which will be left padded with zeros to achieve it.
+        :param start_idx: The split index to start counting from (default is ``0``).
         :return: a list of lazily opened chunk manifests.
         """
         return split_manifest_lazy(
@@ -1030,6 +1044,7 @@ class CutSet(Serializable, AlgorithmMixin):
             chunk_size=chunk_size,
             prefix=prefix,
             num_digits=num_digits,
+            start_idx=start_idx,
         )
 
     def subset(
@@ -1119,19 +1134,22 @@ class CutSet(Serializable, AlgorithmMixin):
         return self.map(lambda cut: cut.filter_supervisions(predicate))
 
     def merge_supervisions(
-        self, custom_merge_fn: Optional[Callable[[str, Iterable[Any]], Any]] = None
+        self,
+        merge_policy: str = "delimiter",
+        custom_merge_fn: Optional[Callable[[str, Iterable[Any]], Any]] = None,
     ) -> "CutSet":
         """
         Return a copy of the cut that has all of its supervisions merged into
         a single segment.
 
         The new start is the start of the earliest superivion, and the new duration
-        is a minimum spanning duration for all the supervisions.
+        is a minimum spanning duration for all the supervisions. The text fields of
+        all segments are concatenated with a whitespace.
 
-        The text fields are concatenated with a whitespace, and all other string fields
-        (including IDs) are prefixed with "cat#" and concatenated with a hash symbol "#".
-        This is also applied to ``custom`` fields. Fields with a ``None`` value are omitted.
-
+        :param merge_policy: one of "keep_first" or "delimiter". If "keep_first", we
+            keep only the first segment's field value, otherwise all string fields
+            (including IDs) are prefixed with "cat#" and concatenated with a hash symbol "#".
+            This is also applied to ``custom`` fields. Fields with a ``None`` value are omitted.
         :param custom_merge_fn: a function that will be called to merge custom fields values.
             We expect ``custom_merge_fn`` to handle all possible custom keys.
             When not provided, we will treat all custom values as strings.
@@ -1139,7 +1157,9 @@ class CutSet(Serializable, AlgorithmMixin):
             ``custom_merge_fn(custom_key, [s.custom[custom_key] for s in sups])``
         """
         return self.map(
-            lambda cut: cut.merge_supervisions(custom_merge_fn=custom_merge_fn)
+            lambda cut: cut.merge_supervisions(
+                merge_policy=merge_policy, custom_merge_fn=custom_merge_fn
+            )
         )
 
     def trim_to_supervisions(
@@ -1233,6 +1253,7 @@ class CutSet(Serializable, AlgorithmMixin):
         self,
         type: str,
         max_pause: Seconds = 0.0,
+        max_segment_duration: Optional[Seconds] = None,
         delimiter: str = " ",
         keep_all_channels: bool = False,
         num_jobs: int = 1,
@@ -1267,6 +1288,7 @@ class CutSet(Serializable, AlgorithmMixin):
                             _trim_to_alignments_single,
                             type=type,
                             max_pause=max_pause,
+                            max_segment_duration=max_segment_duration,
                             delimiter=delimiter,
                             keep_all_channels=keep_all_channels,
                         ),
@@ -1282,6 +1304,7 @@ class CutSet(Serializable, AlgorithmMixin):
             _trim_to_alignments_single,
             type=type,
             max_pause=max_pause,
+            max_segment_duration=max_segment_duration,
             delimiter=delimiter,
             keep_all_channels=keep_all_channels,
         )
@@ -1398,6 +1421,17 @@ class CutSet(Serializable, AlgorithmMixin):
 
         groups = groupby(lambda cut: (cut.recording.id, cut.start, cut.end), self)
         return CutSet.from_cuts(MultiCut.from_mono(*cuts) for cuts in groups.values())
+
+    def sort_by_recording_id(self, ascending: bool = True) -> "CutSet":
+        """
+        Sort the CutSet alphabetically according to 'recording_id'. Ascending by default.
+
+        This is advantageous before caling `save_audios()` on a `trim_to_supervision()`
+        processed `CutSet`, also make sure that `set_caching_enabled(True)` was called.
+        """
+        return CutSet.from_cuts(
+            sorted(self, key=(lambda cut: cut.recording.id), reverse=not ascending)
+        )
 
     def sort_by_duration(self, ascending: bool = False) -> "CutSet":
         """
@@ -1804,6 +1838,7 @@ class CutSet(Serializable, AlgorithmMixin):
         preserve_id: Optional[str] = None,
         mix_prob: float = 1.0,
         seed: int = 42,
+        random_mix_offset: bool = False,
     ) -> "CutSet":
         """
         Mix cuts in this ``CutSet`` with randomly sampled cuts from another ``CutSet``.
@@ -1829,6 +1864,9 @@ class CutSet(Serializable, AlgorithmMixin):
         :param mix_prob: an optional float in range [0, 1].
             Specifies the probability of performing a mix.
             Values lower than 1.0 mean that some cuts in the output will be unchanged.
+        :param random_mix_offset: an optional bool.
+            When ``True`` and the duration of the to be mixed in cut in longer than the original cut,
+             select a random sub-region from the to be mixed in cut.
         :param seed: an optional int. Random seed for choosing the cuts to mix and the SNR.
         :return: a new ``CutSet`` with mixed cuts.
         """
@@ -1856,6 +1894,11 @@ class CutSet(Serializable, AlgorithmMixin):
             to_mix = cuts.sample()
             # Determine the SNR - either it's specified or we need to sample one.
             cut_snr = rng.uniform(*snr) if isinstance(snr, (list, tuple)) else snr
+            if random_mix_offset and to_mix.duration > cut.duration:
+                to_mix = to_mix.truncate(
+                    offset=rng.uniform(0, to_mix.duration - cut.duration),
+                    duration=cut.duration,
+                )
             # Actual mixing
             mixed = cut.mix(other=to_mix, snr=cut_snr, preserve_id=preserve_id)
             # Did the user specify a duration?
@@ -2312,6 +2355,7 @@ class CutSet(Serializable, AlgorithmMixin):
         executor: Optional[Executor] = None,
         augment_fn: Optional[AugmentFn] = None,
         progress_bar: bool = True,
+        shuffle_on_split: bool = True,
     ) -> "CutSet":
         """
         Store waveforms of all cuts as audio recordings to disk.
@@ -2341,6 +2385,8 @@ class CutSet(Serializable, AlgorithmMixin):
             https://lhotse.readthedocs.io/en/latest/parallelism.html
         :param progress_bar: Should a progress bar be displayed (automatically turned off
             for parallel computation).
+        :param shuffle_on_split: Shuffle the ``CutSet`` before splitting it for the parallel workers.
+            It is active only when `num_jobs > 1`. The default is True.
         :return: Returns a new ``CutSet``.
         """
         from cytoolz import identity
@@ -2387,14 +2433,17 @@ class CutSet(Serializable, AlgorithmMixin):
             )
 
         # Parallel execution: prepare the CutSet splits
-        cut_sets = self.split(num_jobs, shuffle=True)
+        cut_sets = self.split(num_jobs, shuffle=shuffle_on_split)
 
         # Initialize the default executor if None was given
         if executor is None:
             import multiprocessing
 
+            # The `is_caching_enabled()` state gets transfered to
+            # the spawned sub-processes implictly (checked).
             executor = ProcessPoolExecutor(
-                num_jobs, mp_context=multiprocessing.get_context("spawn")
+                max_workers=num_jobs,
+                mp_context=multiprocessing.get_context("spawn"),
             )
 
         # Submit the chunked tasks to parallel workers.
@@ -2485,6 +2534,91 @@ class CutSet(Serializable, AlgorithmMixin):
 
     def with_recording_path_prefix(self, path: Pathlike) -> "CutSet":
         return self.map(partial(_add_recording_path_prefix_single, path=path))
+
+    def copy_data(self, output_dir: Pathlike, verbose: bool = True) -> "CutSet":
+        """
+        Copies every data item referenced by this CutSet into a new directory.
+        The structure is as follows:
+
+        - output_dir
+        ├── audio
+        |   ├── rec1.flac
+        |   └── ...
+        ├── custom
+        |   ├── field1
+        |   |   ├── arr1-1.npy
+        |   |   └── ...
+        |   └── field2
+        |       ├── arr2-1.npy
+        |       └── ...
+        ├── features.lca
+        └── cuts.jsonl.gz
+
+        :param output_dir: The root directory where we'll store the copied data.
+        :param verbose: Show progress bar, enabled by default.
+        :return: CutSet manifest pointing to the new data.
+        """
+        from lhotse.array import Array, TemporalArray
+        from lhotse.features.io import NumpyHdf5Writer
+
+        output_dir = Path(output_dir)
+        audio_dir = output_dir / "audio"
+        audio_dir.mkdir(exist_ok=True, parents=True)
+        feature_file = output_dir / "features.lca"
+        custom_dir = output_dir / "custom"
+        custom_dir.mkdir(exist_ok=True, parents=True)
+
+        custom_writers = {}
+
+        progbar = partial(tqdm, desc="Copying CutSet data") if verbose else lambda x: x
+
+        with CutSet.open_writer(
+            output_dir / "cuts.jsonl.gz"
+        ) as manifest_writer, LilcomChunkyWriter(feature_file) as feature_writer:
+
+            def _copy_single(cut):
+                cut = fastcopy(cut)
+                if cut.has_features:
+                    cut.features = cut.features.copy_feats(writer=feature_writer)
+                if cut.has_recording:
+                    cut = cut.save_audio(
+                        (audio_dir / cut.recording_id).with_suffix(".flac"),
+                        bits_per_sample=16,
+                    )
+                if cut.custom is not None:
+                    for k, v in cut.custom.items():
+                        if isinstance(v, (Array, TemporalArray)):
+                            if k not in custom_writers:
+                                p = custom_dir / k
+                                p.mkdir(exist_ok=True, parents=True)
+                                custom_writers[k] = NumpyHdf5Writer(p)
+                            cust_writer = custom_writers[k]
+                            cust_writer.write(cut.id, v.load())
+                return cut
+
+            for item in progbar(self):
+                if isinstance(item, PaddingCut):
+                    manifest_writer.write(item)
+                    continue
+
+                if isinstance(item, MixedCut):
+                    cpy = fastcopy(item)
+                    for t in cpy.tracks:
+                        if isinstance(t.cut, DataCut):
+                            _copy_single(t.cut)
+                    manifest_writer.write(cpy)
+
+                elif isinstance(item, DataCut):
+                    cpy = _copy_single(item)
+                    manifest_writer.write(cpy)
+
+                else:
+                    raise RuntimeError(f"Unexpected manifest type: {type(item)}")
+
+        for w in custom_writers.values():
+            w.close()
+
+        return manifest_writer.open_manifest()
 
     def copy_feats(
         self, writer: FeaturesWriter, output_path: Optional[Pathlike] = None
@@ -2854,9 +2988,18 @@ def pad(
             else None
         )
 
+    padding_duration = round(duration - cut.duration, ndigits=8)
+
+    video = None
+    if cut.has_video:
+        video = cut.video
+        video = video.copy_with(
+            num_frames=compute_num_samples(padding_duration, video.fps)
+        )
+
     padding_cut = PaddingCut(
         id=str(uuid4()),
-        duration=round(duration - cut.duration, ndigits=8),
+        duration=padding_duration,
         feat_value=pad_feat_value,
         num_features=cut.num_features,
         # The num_frames and sampling_rate fields are tricky, because it is possible to create a MixedCut
@@ -2868,6 +3011,7 @@ def pad(
         ),
         frame_shift=cut.frame_shift,
         sampling_rate=cut.sampling_rate,
+        video=video,
         custom=pad_value_dict,
     )
 
@@ -2975,6 +3119,7 @@ def create_cut_set_eager(
     features: Optional[FeatureSet] = None,
     output_path: Optional[Pathlike] = None,
     random_ids: bool = False,
+    tolerance: Seconds = 0.001,
 ) -> CutSet:
     """
     Create a :class:`.CutSet` from any combination of supervision, feature and recording manifests.
@@ -2993,6 +3138,9 @@ def create_cut_set_eager(
     :param output_path: an optional path where the :class:`.CutSet` is stored.
     :param random_ids: boolean, should the cut IDs be randomized. By default, use the recording ID
         with a loop index and a channel idx, i.e. "{recording_id}-{idx}-{channel}")
+    :param tolerance: float, tolerance for supervision and feature segment boundary comparison.
+        By default, it's 1ms. Increasing this value can be helpful when importing Kaldi data
+        directories with precomputed features.
     :return: a new :class:`.CutSet` instance.
     """
     assert (
@@ -3039,6 +3187,7 @@ def create_cut_set_eager(
                             start_after=feats.start,
                             end_before=feats.end,
                             adjust_offset=True,
+                            tolerance=tolerance,
                         )
                     )
                     if sup_ok
@@ -3063,11 +3212,7 @@ def create_cut_set_eager(
                     duration=recording.duration,
                     channel=channel,
                     recording=recording,
-                    supervisions=list(
-                        supervisions.find(
-                            recording_id=recording.id,
-                        )
-                    )
+                    supervisions=list(supervisions.find(recording_id=recording.id))
                     if sup_ok
                     else [],
                 )
@@ -3084,6 +3229,7 @@ def create_cut_set_lazy(
     supervisions: Optional[SupervisionSet] = None,
     features: Optional[FeatureSet] = None,
     random_ids: bool = False,
+    tolerance: Seconds = 0.001,
 ) -> CutSet:
     """
     Create a :class:`.CutSet` from any combination of supervision, feature and recording manifests.
@@ -3115,6 +3261,9 @@ def create_cut_set_lazy(
     :param features: an optional :class:`~lhotse.features.base.FeatureSet` manifest.
     :param random_ids: boolean, should the cut IDs be randomized. By default, use the recording ID
         with a loop index and a channel idx, i.e. "{recording_id}-{idx}-{channel}")
+    :param tolerance: float, tolerance for supervision and feature segment boundary comparison.
+        By default, it's 1ms. Increasing this value can be helpful when importing Kaldi data
+        directories with precomputed features.
     :return: a new :class:`.CutSet` instance.
     """
     assert (
@@ -3188,6 +3337,7 @@ def create_cut_set_lazy(
                             start_after=feats.start,
                             end_before=feats.end,
                             adjust_offset=True,
+                            tolerance=tolerance,
                         )
                     )
                     if sup_ok
@@ -3352,7 +3502,10 @@ def find_segments_with_speaker_count(
 
 
 def _cut_into_windows_single(
-    cuts: CutSet, duration, hop, keep_excessive_supervisions
+    cuts: CutSet,
+    duration,
+    hop,
+    keep_excessive_supervisions,
 ) -> CutSet:
     return cuts.cut_into_windows(
         duration=duration,
@@ -3380,12 +3533,14 @@ def _trim_to_alignments_single(
     cuts: CutSet,
     type,
     max_pause,
+    max_segment_duration,
     delimiter,
     keep_all_channels,
 ) -> CutSet:
     return cuts.trim_to_alignments(
         type=type,
         max_pause=max_pause,
+        max_segment_duration=max_segment_duration,
         delimiter=delimiter,
         keep_all_channels=keep_all_channels,
     ).to_eager()

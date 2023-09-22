@@ -6,7 +6,7 @@ import torch
 from intervaltree import Interval, IntervalTree
 from typing_extensions import Literal
 
-from lhotse.audio import AudioSource, Recording
+from lhotse.audio import AudioSource, Recording, VideoInfo
 from lhotse.augmentation import AugmentFn
 from lhotse.features import FeatureExtractor
 from lhotse.supervision import SupervisionSegment
@@ -164,12 +164,15 @@ class Cut:
     features_type: Optional[str]
     has_recording: bool
     has_features: bool
+    has_video: bool
+    video: Optional[VideoInfo]
 
     # The following is the list of methods implemented by the child classes.
     # They are not abstract methods because dataclasses do not work well with the "abc" module.
     # Check a specific child class for their documentation.
     from_dict: Callable[[Dict], "Cut"]
     load_audio: Callable[[], np.ndarray]
+    load_video: Callable[[], Tuple[torch.Tensor, Optional[torch.Tensor]]]
     load_features: Callable[[], np.ndarray]
     compute_and_store_features: Callable
     drop_features: Callable
@@ -510,6 +513,7 @@ class Cut:
         self,
         type: str,
         max_pause: Optional[Seconds] = None,
+        max_segment_duration: Optional[Seconds] = None,
         delimiter: str = " ",
         keep_all_channels: bool = False,
     ) -> "CutSet":  # noqa: F821
@@ -517,7 +521,8 @@ class Cut:
         Splits the current :class:`.Cut` into its constituent alignment items (:class:`.AlignmentItem`).
         These cuts have identical start times and durations as the alignment item. Additionally,
         the `max_pause` option can be used to merge alignment items that are separated by a pause
-        shorter than `max_pause`.
+        shorter than `max_pause`. If `max_segment_duration` is specified, we will keep merging
+        consecutive segments until the duration of the merged segment exceeds `max_segment_duration`.
 
         For the case of a multi-channel cut with multiple alignments, we can either trim
         while respecting the supervision channels (in which case output cut has the same channels
@@ -530,6 +535,21 @@ class Cut:
 
         .. hint:: If a MultiCut is trimmed and the resulting trimmed cut contains a single channel,
             we convert it to a MonoCut.
+
+        .. hint:: If you have a Cut with multiple supervision segments and you want to trim it to
+            the word-level alignment, you can use the :meth:`.Cut.merge_supervisions` method
+            first to merge the supervisions into a single one, followed by the
+            :meth:`.Cut.trim_to_alignments` method. For example::
+
+                >>> cut = cut.merge_supervisions(type='word', delimiter=' ')
+                >>> cut = cut.trim_to_alignments(type='word', max_pause=1.0)
+
+        .. hint:: The above technique can also be used to segment long cuts into roughly equal
+            duration segments, while respecting alignment boundaries. For example, to split a
+            Cut into 10s segments, you can do::
+
+                >>> cut = cut.merge_supervisions(type='word', delimiter=' ')
+                >>> cut = cut.trim_to_alignments(type='word', max_pause=10.0, max_segment_duration=10.0)
 
         :param type: The type of the alignment to trim to (e.g. "word").
         :param max_pause: The maximum pause allowed between the alignments to merge them. If ``None``,
@@ -546,6 +566,10 @@ class Cut:
             # Set to a negative value so that no merging is performed.
             max_pause = -1.0
 
+        if max_segment_duration is None:
+            # Set to the cut duration so that resulting segments are always smaller.
+            max_segment_duration = self.duration
+
         # For the implementation, we first create new supervisions for the cut, and then
         # use the `trim_to_supervisions` method to do the actual trimming.
         new_supervisions = []
@@ -561,6 +585,9 @@ class Cut:
             # Merge the alignments if needed. We also keep track of the indices of the
             # merged alignments in the original list. This is needed to create the
             # `alignment` field in the new supervisions.
+            # NOTE: We use the `AlignmentItem` class here for convenience --- the merged
+            # alignments are not actual alignment items, but rather just a way to keep
+            # track of merged segments.
             merged_alignments = [(alignments[0], [0])]
             for i, item in enumerate(alignments[1:]):
                 # If alignment item is blank, skip it. Sometimes, blank alignment items
@@ -568,7 +595,10 @@ class Cut:
                 if item.symbol.strip() == "":
                     continue
                 prev_item, prev_indices = merged_alignments[-1]
-                if item.start - prev_item.end <= max_pause:
+                if (
+                    item.start - prev_item.end <= max_pause
+                    and item.end - prev_item.start <= max_segment_duration
+                ):
                     new_item = AlignmentItem(
                         symbol=delimiter.join([prev_item.symbol, item.symbol]),
                         start=prev_item.start,
@@ -718,14 +748,32 @@ class Cut:
 
         if not hop:
             hop = duration
+
+        if self.has_video:
+            assert (duration * self.video.fps).is_integer(), (
+                f"[cut.id={self.id}] Window duration must be defined to result in an integer number of video frames "
+                f"(duration={duration} * fps={self.video.fps} = {duration * self.video.fps})."
+            )
+            assert (hop * self.video.fps).is_integer(), (
+                "[cut.id={self.id}] Window hop must be defined to result in an integer number of video frames "
+                f"(hop={hop} * fps={self.video.fps} = {hop* self.video.fps})."
+            )
+
         new_cuts = []
         n_windows = compute_num_windows(self.duration, duration, hop)
+
+        # Operation without an Interval Tree is O(nm), where `n` is the number
+        # of resulting windows, and `m` is the number of supervisions in the cut.
+        # With an Interval Tree, we can do it in O(nlog(m) + m)
+        supervisions_index = self.index_supervisions(index_mixed_tracks=True)
+
         for i in range(n_windows):
             new_cuts.append(
                 self.truncate(
                     offset=hop * i,
                     duration=duration,
                     keep_excessive_supervisions=keep_excessive_supervisions,
+                    _supervisions_index=supervisions_index,
                 ).with_id(f"{self.id}-{i}")
             )
         return CutSet.from_cuts(new_cuts)
@@ -825,8 +873,10 @@ class Cut:
         )
         return fastcopy(
             recording.to_cut(),
+            id=self.id,
             supervisions=self.supervisions,
             custom=self.custom if hasattr(self, "custom") else None,
+            features=self.features if self.has_features else None,
         )
 
     def speakers_feature_mask(

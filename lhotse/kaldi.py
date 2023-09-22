@@ -1,3 +1,4 @@
+import logging
 import math
 import warnings
 from collections import defaultdict
@@ -5,7 +6,7 @@ from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
-from lhotse.audio import AudioSource, Recording, RecordingSet, audioread_info
+from lhotse.audio import AudioSource, Recording, RecordingSet, info
 from lhotse.features import Features, FeatureSet
 from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.utils import (
@@ -42,12 +43,12 @@ def floor_duration_to_milliseconds(
 
 def get_duration(
     path: Pathlike,
-) -> float:
+) -> Optional[float]:
     """
     Read a audio file, it supports pipeline style wave path and real waveform.
 
     :param path: Path to an audio file or a Kaldi-style pipe.
-    :return: float duration of the recording, in seconds.
+    :return: float duration of the recording, in seconds or `None` in case of read error.
     """
     path = str(path)
     if path.strip().endswith("|"):
@@ -58,19 +59,18 @@ def get_duration(
             )
         import kaldi_native_io
 
-        wave = kaldi_native_io.read_wave(path)
-        assert wave.data.shape[0] == 1, f"Expect 1 channel. Given {wave.data.shape[0]}"
+        try:
+            wave = kaldi_native_io.read_wave(path)
+            assert (
+                wave.data.shape[0] == 1
+            ), f"Expect 1 channel. Given {wave.data.shape[0]}"
 
-        return floor_duration_to_milliseconds(wave.duration)
-    try:
-        # Try to parse the file using pysoundfile first.
-        import soundfile
+            return floor_duration_to_milliseconds(wave.duration)
+        except:  # exception type from kaldi_native_io ? (std::runtime_error via pybind11)
+            return None  # report a read error (recovery from C++ exception)
 
-        info = soundfile.info(path)
-    except Exception:
-        # Try to parse the file using audioread as a fallback.
-        info = audioread_info(path)
-    return floor_duration_to_milliseconds(info.duration)
+    audio_info = info(path)
+    return floor_duration_to_milliseconds(audio_info.duration)
 
 
 def load_kaldi_data_dir(
@@ -122,10 +122,35 @@ def load_kaldi_data_dir(
             "have the same length as the  wav.scp file"
         )
     else:
-        with ProcessPoolExecutor(num_jobs) as ex:
-            dur_vals = ex.map(get_duration, recordings.values())
+        # ProcessPoolExecutor hanging observed for datasets with >100k recordings.
+        # Using large chunks to be processed per child processes is advised here:
+        # https://docs.python.org/3/library/concurrent.futures.html
+        #
+        # num_chunks = num_jobs * 10, e.g. 250
+        chunksize = max(1, len(recordings) // (num_jobs * 10))
+        with ProcessPoolExecutor(max_workers=num_jobs) as ex:
+            dur_vals = list(
+                ex.map(get_duration, recordings.values(), chunksize=chunksize)
+            )
+
         durations = dict(zip(recordings.keys(), dur_vals))
 
+    # remove recordings with 'None' duration (i.e. there was a read error)
+    for recording_id, dur_value in durations.items():
+        if dur_value is None:
+            logging.warning(
+                f"[{recording_id}] Could not get duration. "
+                f"Failed to read audio from `{recordings[recording_id]}`. "
+                "Dropping the recording from manifest."
+            )
+            del recordings[recording_id]
+    # make sure not too many utterances were dropped
+    if len(recordings) < len(durations) * 0.8:
+        raise RuntimeError(
+            f'Failed to load more than 20% utterances of the dataset: "{path}"'
+        )
+
+    # assemble the new RecordingSet
     recording_set = RecordingSet.from_recordings(
         Recording(
             id=recording_id,

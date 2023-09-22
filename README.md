@@ -9,12 +9,20 @@
 [![codecov](https://codecov.io/gh/lhotse-speech/lhotse/branch/master/graph/badge.svg)](https://codecov.io/gh/lhotse-speech/lhotse)
 [![Code style: black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/lhotse-speech/lhotse-speech.github.io/blob/master/notebooks/lhotse-introduction.ipynb)
+[![arXiv](https://img.shields.io/badge/arXiv-2110.12561-b31b1b.svg)](https://arxiv.org/abs/2110.12561)
 
 </div>
+
 
 # Lhotse
 
 Lhotse is a Python library aiming to make speech and audio data preparation flexible and accessible to a wider community. Alongside [k2](https://github.com/k2-fsa/k2), it is a part of the next generation [Kaldi](https://github.com/kaldi-asr/kaldi) speech processing library.
+
+## Tutorial presentations and materials
+
+- (_Interspeech 2023_) Tutorial notebook [![Interspeech 2023 Tutorial](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1obZjUuVwks3A4oFX3gXFtPOM2LtrPQfL?usp=sharing)
+- (_Interspeech 2023_) [Tutorial slides](https://livejohnshopkins-my.sharepoint.com/:p:/g/personal/mwiesne2_jh_edu/EYqRDl8cIr5BsVDxi1MOW5EBUpdqh10WFkzqixPIFM63hg?e=u3lrmL)
+- (_Interspeech 2021_) [Recorded lecture (3h)](https://www.youtube.com/watch?v=y6CJLFQlmhc&pp=ygUgaW50ZXJzcGVlY2ggMjAyMSBsaG90c2UgdHV0b3JpYWw%3D)
 
 ## About
 
