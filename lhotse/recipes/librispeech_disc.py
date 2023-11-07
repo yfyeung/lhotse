@@ -144,7 +144,7 @@ def parse_utterance(
     recording = Recording.from_file(audio_path, recording_id=recording_id)
     # Then, create the corresponding supervisions
     segment = SupervisionSegment(
-        id=recording_id,
+        id=recording_id + "_sp1.1",
         recording_id=recording_id,
         start=0.0,
         duration=recording.duration,
@@ -159,4 +159,4 @@ def parse_utterance(
 
 
 if __name__ == "__main__":
-    prepare_librispeech("/star-data/yifan/LibriSpeech", "/k2-dev/yangyifan/icefall-disc/egs/librispeech/encodec/download/DiscreteAudioToken/encodec/out_quantized", "auto", ".", num_jobs=16)
+    prepare_librispeech("/mnt/lustre/sjtu/shared/data/asr/rawdata/LibriSpeech", "/mnt/lustre/sjtu/home/yfy62/discrete_token_data/LibriSpeech/wavlm_large_l21_kms2000/out_quantized_sp1.1", "auto", ".", num_jobs=16)

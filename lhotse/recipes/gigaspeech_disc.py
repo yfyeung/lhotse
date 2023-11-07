@@ -35,7 +35,7 @@ def prepare_gigaspeech(
             "To process the GigaSpeech corpus, please install optional dependency: pip install speechcolab"
         )
 
-    subsets = ("M", "DEV", "TEST") if dataset_parts == "auto" else dataset_parts
+    subsets = ("XL",) if dataset_parts == "auto" else dataset_parts
     if isinstance(subsets, str):
         subsets = [subsets]
     corpus_dir = Path(corpus_dir)
@@ -149,9 +149,9 @@ def parse_utterance(
 
 if __name__ == "__main__":
     prepare_gigaspeech(
-        "/ceph-sh1/fangjun/data/giga/release/GigaSpeech",
-        "/k2-dev/yangyifan/icefall-disc/egs/gigaspeech/hubert_large_l24_kms2000/download/DiscreteAudioToken/hubert_large_l24_kms2000/out_quantized",
+        "/mnt/lustre/sjtu/shared/data/asr/rawdata/GigaSpeech",
+        "/mnt/lustre/sjtu/home/fys18/code/DiscreteAudioToken/DataProcess/data/gigaspeech-xl/wavlm_large_l21_kms2000_sp1.0_nopad/out_quantized",
         ".",
         "auto",
-        num_jobs=32,
+        num_jobs=16,
     )
