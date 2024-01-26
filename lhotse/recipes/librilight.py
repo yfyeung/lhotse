@@ -40,6 +40,7 @@ LIBRILIGHT_URL = (
 def _parse_utterance(
     corpus_dir: Pathlike,
     audio_path: Pathlike,
+    segment_infos: Optional[list] = None,
 ) -> Optional[Tuple[Recording, SupervisionSegment]]:
     file_name = str(audio_path).replace(".flac", "").replace(str(corpus_dir) + "/", "")
     speaker = str(audio_path).split("/")[-3]
@@ -53,22 +54,41 @@ def _parse_utterance(
         path=audio_path,
         recording_id=file_name,
     )
-    segment = SupervisionSegment(
-        id=file_name,
-        recording_id=file_name,
-        start=0.0,
-        duration=recording.duration,
-        channel=0,
-        language="English",
-        speaker=speaker,
-    )
 
-    return recording, segment
+    segments = []
+    if segment_infos is not None:
+        for segment_info in segment_infos:
+            segments.append(
+                SupervisionSegment(
+                    id=segment_info[0],
+                    recording_id=file_name,
+                    start=segment_info[1],
+                    duration=segment_info[2] - segment_info[1],
+                    channel=0,
+                    language="English",
+                    speaker=speaker,
+                )
+            )
+    else:
+        segments.append(
+            SupervisionSegment(
+                id=file_name,
+                recording_id=file_name,
+                start=0.0,
+                duration=recording.duration,
+                channel=0,
+                language="English",
+                speaker=speaker,
+            )
+        )
+
+    return recording, segments
 
 
 def _prepare_subset(
     subset: str,
     corpus_dir: Pathlike,
+    vad_info_dict: Optional[defaultdict] = None,
     num_jobs: int = 1,
 ) -> Tuple[RecordingSet, SupervisionSet]:
     """
@@ -86,15 +106,21 @@ def _prepare_subset(
         recordings = []
         supervisions = []
         for audio_path in tqdm(audio_paths, desc="Distributing tasks"):
-            futures.append(ex.submit(_parse_utterance, corpus_dir, audio_path))
+            if vad_info_dict is not None:
+                segment_infos = vad_info_dict[
+                    str(audio_path).split("/", -1)[-1].replace(".flac", "")
+                ]
+            futures.append(
+                ex.submit(_parse_utterance, corpus_dir, audio_path, segment_infos)
+            )
 
         for future in tqdm(futures, desc="Processing"):
             result = future.result()
             if result is None:
                 continue
-            recording, segment = result
+            recording, segments = result
             recordings.append(recording)
-            supervisions.append(segment)
+            supervisions.extend(segments)
 
         recording_set = RecordingSet.from_recordings(recordings)
         supervision_set = SupervisionSet.from_segments(supervisions)
@@ -109,6 +135,7 @@ def _prepare_subset(
 def prepare_librilight(
     corpus_dir: Pathlike,
     output_dir: Optional[Pathlike] = None,
+    vad_path: Optional[Pathlike] = None,
     num_jobs: int = 1,
 ) -> Dict[str, Dict[str, Union[RecordingSet, SupervisionSet]]]:
     """
@@ -129,6 +156,18 @@ def prepare_librilight(
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
 
+    if vad_path is not None:
+        logging.info(f"Using Vad from {vad_path}")
+        vad_path = Path(vad_path)
+        with open(vad_path) as f:
+            vad_infos = f.read().splitlines()
+        vad_info_dict = defaultdict(list)
+        for vad_info in vad_infos:
+            vad_info = vad_info.split(" ", -1)
+            vad_info_dict[vad_info[1]].append(
+                (vad_info[0], float(vad_info[2]), float(vad_info[3]))
+            )
+
     manifests = defaultdict(dict)
 
     for part in tqdm(subsets, desc="Dataset parts"):
@@ -142,7 +181,9 @@ def prepare_librilight(
             logging.info(f"LibriLight subset: {part} already prepared - skipping.")
             continue
 
-        recording_set, supervision_set = _prepare_subset(part, corpus_dir, num_jobs)
+        recording_set, supervision_set = _prepare_subset(
+            part, corpus_dir, vad_info_dict, num_jobs
+        )
 
         if output_dir is not None:
             supervision_set.to_file(
@@ -153,3 +194,12 @@ def prepare_librilight(
         manifests[part] = {"recordings": recording_set, "supervisions": supervision_set}
 
     return manifests
+
+
+if __name__ == "__main__":
+    prepare_librilight(
+        "/data/LibriLight",
+        ".",
+        "/data/yfy62/librilight_demo/download/segments",
+        num_jobs=16,
+    )
