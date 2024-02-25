@@ -26,7 +26,7 @@ from lhotse.audio import Recording, RecordingSet
 from lhotse.qa import fix_manifests, validate_recordings_and_supervisions
 from lhotse.recipes.utils import manifests_exist
 from lhotse.supervision import SupervisionSegment, SupervisionSet
-from lhotse.utils import Pathlike
+from lhotse.utils import Pathlike, add_durations
 
 LIBRILIGHT = ("small", "medium", "large")
 
@@ -63,7 +63,9 @@ def _parse_utterance(
                     id=segment_info[0],
                     recording_id=file_name,
                     start=segment_info[1],
-                    duration=segment_info[2] - segment_info[1],
+                    duration=add_durations(
+                        segment_info[2], -segment_info[1], sampling_rate=16000,
+                    ),
                     channel=0,
                     language="English",
                     speaker=speaker,
