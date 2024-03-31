@@ -141,12 +141,3 @@ def prepare_gigaspeech2(
         manifests[part] = {"recordings": recording_set, "supervisions": supervision_set}
 
     return manifests
-
-
-if __name__ == "__main__":
-    prepare_gigaspeech2(
-        corpus_dir="/mnt/cloudstorfs/sjtu_home/yifan.yang02/raw_data/GigaSpeech2",
-        output_dir="/mnt/cloudstorfs/sjtu_home/yifan.yang02/icefall_data/gigaspeech2/data/manifests",
-        lang="Thai",
-        num_jobs=16,
-    )
