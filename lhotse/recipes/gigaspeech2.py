@@ -16,14 +16,10 @@ from lhotse.utils import Pathlike, add_durations
 
 
 def _parse_utterance(
-    part_path: Pathlike,
-    line: str,
+    audio_path: Pathlike,
     lang: Optional[str] = None,
 ) -> Optional[Tuple[Recording, SupervisionSegment]]:
-    recording_id, text = line.strip().split(maxsplit=1)
-    audio_path = (
-        part_path / recording_id.rsplit("-", maxsplit=1)[0] / f"{recording_id}.wav"
-    )
+    recording_id = "-".join(audio_path.stem.rsplit("_", maxsplit=3))
 
     if not audio_path.is_file():
         logging.warning(f"No such file: {audio_path}")
@@ -41,7 +37,6 @@ def _parse_utterance(
         duration=recording.duration,
         channel=0,
         language=lang,
-        text=text.strip(),
     )
 
     return recording, segment
@@ -61,16 +56,14 @@ def _prepare_subset(
     """
     corpus_dir = Path(corpus_dir)
     part_path = corpus_dir / subset
-    trans_paths = list(part_path.rglob("*.trans.txt"))
+    audio_paths = list(part_path.rglob("*.wav"))
 
     with ThreadPoolExecutor(num_jobs) as ex:
         futures = []
         recordings = []
         supervisions = []
-        for trans_path in tqdm(trans_paths, desc="Distributing tasks"):
-            with open(trans_path) as f:
-                for line in f:
-                    futures.append(ex.submit(_parse_utterance, part_path, line, lang))
+        for audio_path in tqdm(audio_paths, desc="Distributing tasks"):
+            futures.append(ex.submit(_parse_utterance, audio_path, lang))
 
         for future in tqdm(futures, desc="Processing"):
             result = future.result()
