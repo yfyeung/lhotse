@@ -2,15 +2,16 @@ from dataclasses import dataclass
 from io import BytesIO
 from math import ceil, isclose
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Tuple, Union
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Union
 
 import numpy as np
 import torch
 from _decimal import ROUND_HALF_UP
 
-from lhotse.audio.backend import info, torchaudio_info, torchaudio_save_flac_safe
+from lhotse.audio.backend import info, save_audio, torchaudio_info
 from lhotse.audio.source import AudioSource
 from lhotse.audio.utils import (
+    AudioLoadingError,
     DurationMismatchError,
     VideoInfo,
     get_audio_duration_mismatch_tolerance,
@@ -54,13 +55,19 @@ class Recording:
     and a 1-hour session with multiple channels and speakers (e.g., in AMI).
     In the latter case, it is partitioned into data suitable for model training using :class:`~lhotse.cut.Cut`.
 
-    .. hint::
-        Lhotse reads audio recordings using `pysoundfile`_ and `audioread`_, similarly to librosa,
-        to support multiple audio formats. For OPUS files we require ffmpeg to be installed.
+    Internally, Lhotse supports multiple audio backends to read audio file.
+    By default, we try to use libsoundfile, then torchaudio (with FFMPEG integration starting with torchaudio 2.1),
+    and then audioread (which is an ffmpeg CLI wrapper).
+    For sphere files we prefer to use sph2pipe binary as it can work with certain unique encodings such as "shorten".
 
-    .. hint::
-        Since we support importing Kaldi data dirs, if ``wav.scp`` contains unix pipes,
-        :class:`~lhotse.audio.Recording` will also handle them correctly.
+    Audio backends in Lhotse are configurable. See:
+
+    * :func:`~lhotse.audio.backend.available_audio_backends`
+    * :func:`~lhotse.audio.backend.audio_backend`,
+    * :func:`~lhotse.audio.backend.get_current_audio_backend`
+    * :func:`~lhotse.audio.backend.set_current_audio_backend`
+    * :func:`~lhotse.audio.backend.get_default_audio_backend`
+
 
     Examples
 
@@ -109,6 +116,8 @@ class Recording:
             >>> assert samples.shape == (1, 16000)
             >>> samples2 = recording.load_audio(offset=0.5)
             >>> assert samples2.shape == (1, 8000)
+
+        See also: :class:`~lhotse.audio.recording.Recording`, :class:`~lhotse.cut.Cut`, :class:`~lhotse.cut.CutSet`.
     """
 
     id: str
@@ -117,7 +126,7 @@ class Recording:
     num_samples: int
     duration: Seconds
     channel_ids: Optional[List[int]] = None
-    transforms: Optional[List[Dict]] = None
+    transforms: Optional[List[Union[AudioTransform, Dict]]] = None
 
     def __post_init__(self):
         if self.channel_ids is None:
@@ -145,6 +154,14 @@ class Recording:
             if s.has_video:
                 return s
         return None
+
+    @property
+    def is_in_memory(self) -> bool:
+        return any(s.type == "memory" for s in self.sources)
+
+    @property
+    def is_placeholder(self) -> bool:
+        return any(s.type == "shar" for s in self.sources)
 
     @property
     def num_channels(self) -> int:
@@ -279,8 +296,17 @@ class Recording:
         if all(src.type == "memory" for src in self.sources):
             return self  # nothing to do
 
+        def _aslist(x):
+            if isinstance(x, int):
+                return [x]
+            return x
+
         # Case #1: no opts specified, read audio without decoding and move it in memory.
-        if all(opt is None for opt in (channels, offset, duration)):
+        if all(opt is None for opt in (channels, offset, duration)) or (
+            (channels is None or _aslist(channels) == self.channel_ids)
+            and (offset is None or isclose(offset, 0.0))
+            and (duration is None or isclose(duration, self.duration))
+        ):
             memory_sources = [
                 AudioSource(
                     type="memory",
@@ -293,15 +319,12 @@ class Recording:
 
         # Case #2: user specified some subset of the recording, decode audio,
         #          subset it, and encode it again but save in memory.
-
         audio = self.load_audio(
             channels=channels, offset=ifnone(offset, 0), duration=duration
         )
         stream = BytesIO()
-        torchaudio_save_flac_safe(
-            stream, torch.from_numpy(audio), self.sampling_rate, format=format
-        )
-        channels = (ifnone(channels, self.channel_ids),)
+        save_audio(stream, torch.from_numpy(audio), self.sampling_rate, format=format)
+        channels = ifnone(channels, self.channel_ids)
         if isinstance(channels, int):
             channels = [channels]
         return Recording(
@@ -319,7 +342,12 @@ class Recording:
         )
 
     def to_dict(self) -> dict:
-        return asdict_nonull(self)
+        d = asdict_nonull(self)
+        if self.transforms is not None:
+            d["transforms"] = [
+                t if isinstance(t, dict) else t.to_dict() for t in self.transforms
+            ]
+        return d
 
     def to_cut(self):
         """
@@ -380,7 +408,8 @@ class Recording:
             )
 
         transforms = [
-            AudioTransform.from_dict(params) for params in self.transforms or []
+            tnfm if isinstance(tnfm, AudioTransform) else AudioTransform.from_dict(tnfm)
+            for tnfm in self.transforms or []
         ]
 
         # Do a "backward pass" over data augmentation transforms to get the
@@ -473,10 +502,15 @@ class Recording:
         )
 
         for t in ifnone(self.transforms, ()):
-            assert t["name"] not in (
-                "Speed",
-                "Tempo",
-            ), "Recording.load_video() does not support speed/tempo perturbation."
+            if isinstance(t, dict):
+                assert t["name"] not in (
+                    "Speed",
+                    "Tempo",
+                ), "Recording.load_video() does not support speed/tempo perturbation."
+            else:
+                assert not isinstance(
+                    t, (Speed, Tempo)
+                ), "Recording.load_video() does not support speed/tempo perturbation."
 
         if not with_audio:
             video, _ = self._video_source.load_video(
@@ -504,7 +538,8 @@ class Recording:
             )
 
         transforms = [
-            AudioTransform.from_dict(params) for params in self.transforms or []
+            tnfm if isinstance(tnfm, AudioTransform) else AudioTransform.from_dict(tnfm)
+            for tnfm in self.transforms or []
         ]
 
         # Do a "backward pass" over data augmentation transforms to get the
@@ -644,7 +679,7 @@ class Recording:
         :return: a modified copy of the current ``Recording``.
         """
         transforms = self.transforms.copy() if self.transforms is not None else []
-        transforms.append(Speed(factor=factor).to_dict())
+        transforms.append(Speed(factor=factor))
         new_num_samples = perturb_num_samples(self.num_samples, factor)
         new_duration = new_num_samples / self.sampling_rate
         return fastcopy(
@@ -669,7 +704,7 @@ class Recording:
         :return: a modified copy of the current ``Recording``.
         """
         transforms = self.transforms.copy() if self.transforms is not None else []
-        transforms.append(Tempo(factor=factor).to_dict())
+        transforms.append(Tempo(factor=factor))
         new_num_samples = perturb_num_samples(self.num_samples, factor)
         new_duration = new_num_samples / self.sampling_rate
         return fastcopy(
@@ -690,7 +725,7 @@ class Recording:
         :return: a modified copy of the current ``Recording``.
         """
         transforms = self.transforms.copy() if self.transforms is not None else []
-        transforms.append(Volume(factor=factor).to_dict())
+        transforms.append(Volume(factor=factor))
         return fastcopy(
             self,
             id=f"{self.id}_vp{factor}" if affix_id else self.id,
@@ -707,7 +742,7 @@ class Recording:
         :return: a modified copy of the current ``Recording``.
         """
         transforms = self.transforms.copy() if self.transforms is not None else []
-        transforms.append(LoudnessNormalization(target=target).to_dict())
+        transforms.append(LoudnessNormalization(target=target))
         return fastcopy(
             self,
             id=f"{self.id}_ln{target}" if affix_id else self.id,
@@ -723,7 +758,7 @@ class Recording:
         :return: a modified copy of the current ``Recording``.
         """
         transforms = self.transforms.copy() if self.transforms is not None else []
-        transforms.append(DereverbWPE().to_dict())
+        transforms.append(DereverbWPE())
         return fastcopy(
             self,
             id=f"{self.id}_wpe" if affix_id else self.id,
@@ -736,7 +771,7 @@ class Recording:
         normalize_output: bool = True,
         early_only: bool = False,
         affix_id: bool = True,
-        rir_channels: Optional[List[int]] = None,
+        rir_channels: Optional[Sequence[int]] = None,
         room_rng_seed: Optional[int] = None,
         source_rng_seed: Optional[int] = None,
     ) -> "Recording":
@@ -797,7 +832,7 @@ class Recording:
                 early_only=early_only,
                 rir_channels=rir_channels if rir_channels is not None else [0],
                 rir_generator=rir_generator,
-            ).to_dict()
+            )
         )
         return fastcopy(
             self,
@@ -816,23 +851,12 @@ class Recording:
             return fastcopy(self)
 
         transforms = self.transforms.copy() if self.transforms is not None else []
-
-        if not any(
-            isinstance(s.source, str) and s.source.endswith(".opus")
-            for s in self.sources
-        ):
-            # OPUS is a special case for resampling.
-            # Normally, we use Torchaudio SoX bindings for resampling,
-            # but in case of OPUS we ask FFMPEG to resample it during
-            # decoding as its faster.
-            # Because of that, we have to skip adding a transform
-            # for OPUS files and only update the metadata in the manifest.
-            transforms.append(
-                Resample(
-                    source_sampling_rate=self.sampling_rate,
-                    target_sampling_rate=sampling_rate,
-                ).to_dict()
+        transforms.append(
+            Resample(
+                source_sampling_rate=self.sampling_rate,
+                target_sampling_rate=sampling_rate,
             )
+        )
 
         new_num_samples = compute_num_samples(
             self.duration, sampling_rate, rounding=ROUND_HALF_UP
@@ -852,8 +876,15 @@ class Recording:
     @staticmethod
     def from_dict(data: dict) -> "Recording":
         raw_sources = data.pop("sources")
+        try:
+            transforms = data.pop("transforms")
+            transforms = [AudioTransform.from_dict(t) for t in transforms]
+        except KeyError:
+            transforms = None
         return Recording(
-            sources=[AudioSource.from_dict(s) for s in raw_sources], **data
+            sources=[AudioSource.from_dict(s) for s in raw_sources],
+            transforms=transforms,
+            **data,
         )
 
 
@@ -887,7 +918,7 @@ def assert_and_maybe_fix_num_samples(
         audio = audio[:, :diff]
         return audio
     else:
-        raise ValueError(
+        raise AudioLoadingError(
             "The number of declared samples in the recording diverged from the one obtained "
             f"when loading audio (offset={offset}, duration={duration}). "
             f"This could be internal Lhotse's error or a faulty transform implementation. "

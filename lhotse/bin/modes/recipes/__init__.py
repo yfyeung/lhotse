@@ -10,6 +10,7 @@ from .aspire import *
 from .atcosim import *
 from .audio_mnist import *
 from .babel import *
+from .baker_zh import *
 from .bengaliai_speech import *
 from .broadcast_news import *
 from .but_reverb_db import *
@@ -44,6 +45,7 @@ from .icmcasr import *
 from .icsi import *
 from .iwslt22_ta import *
 from .kespeech import *
+from .ksponspeech import *
 from .l2_arctic import *
 from .libricss import *
 from .librilight import *
@@ -52,6 +54,8 @@ from .librispeech import *
 from .libritts import *
 from .ljspeech import *
 from .magicdata import *
+from .mdcc import *
+from .medical import *
 from .mgb2 import *
 from .mls import *
 from .mtedx import *
@@ -60,14 +64,18 @@ from .must_c import *
 from .nsc import *
 from .peoples_speech import *
 from .primewords import *
+from .reazonspeech import *
 from .rir_noise import *
+from .slu import *
 from .speechcommands import *
+from .speechio import *
 from .spgispeech import *
 from .stcmds import *
 from .switchboard import *
 from .tal_asr import *
 from .tal_csasr import *
 from .tedlium import *
+from .tedlium2 import *
 from .thchs_30 import *
 from .this_american_life import *
 from .timit import *

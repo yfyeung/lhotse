@@ -1,12 +1,12 @@
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Callable, Dict, List, Literal, Optional, Set, Tuple
 
 import numpy as np
 import torch
 from intervaltree import Interval, IntervalTree
-from typing_extensions import Literal
 
 from lhotse.audio import AudioSource, Recording, VideoInfo
+from lhotse.audio.backend import save_audio
 from lhotse.augmentation import AugmentFn
 from lhotse.features import FeatureExtractor
 from lhotse.supervision import SupervisionSegment
@@ -20,7 +20,6 @@ from lhotse.utils import (
     compute_num_samples,
     compute_num_windows,
     compute_start_duration_for_extended_cut,
-    deprecated,
     fastcopy,
     ifnone,
     overlaps,
@@ -178,6 +177,9 @@ class Cut:
     drop_features: Callable
     drop_recording: Callable
     drop_supervisions: Callable
+    drop_alignments: Callable
+    drop_in_memory_data: Callable
+    iter_data: Callable
     truncate: Callable
     pad: Callable
     extend_by: Callable
@@ -677,7 +679,7 @@ class Cut:
         from .set import CutSet
 
         if not self.supervisions:
-            return self
+            return CutSet([self])
         supervisions = sorted(self.supervisions, key=lambda s: s.start)
         supervision_group = [supervisions[0]]
         cur_end = supervisions[0].end
@@ -816,8 +818,8 @@ class Cut:
     def save_audio(
         self,
         storage_path: Pathlike,
+        format: Optional[str] = None,
         encoding: Optional[str] = None,
-        bits_per_sample: Optional[int] = None,
         augment_fn: Optional[AugmentFn] = None,
         **kwargs,
     ) -> "Cut":
@@ -825,12 +827,10 @@ class Cut:
         Store this cut's waveform as audio recording to disk.
 
         :param storage_path: The path to location where we will store the audio recordings.
-        :param encoding: Audio encoding argument supported by ``torchaudio.save``. See
-            https://pytorch.org/audio/stable/backend.html#save (sox_io backend) and
-            https://pytorch.org/audio/stable/backend.html#id3 (soundfile backend) for more details.
-        :param bits_per_sample: Audio bits_per_sample argument supported by ``torchaudio.save``. See
-            https://pytorch.org/audio/stable/backend.html#save (sox_io backend) and
-            https://pytorch.org/audio/stable/backend.html#id3 (soundfile backend) for more details.
+        :param format: Audio format argument supported by ``torchaudio.save`` or ``soundfile.write``.
+            Please refer to the relevant library's documentation depending on which audio backend you're using.
+        :param encoding: Audio encoding argument supported by ``torchaudio.save`` or ``soundfile.write``.
+            Please refer to the relevant library's documentation depending on which audio backend you're using.
         :param augment_fn: an optional callable used for audio augmentation.
             Be careful with the types of augmentations used: if they modify
             the start/end/duration times of the cut and its supervisions,
@@ -841,7 +841,6 @@ class Cut:
             to mono before saving.
         :return: a new Cut instance.
         """
-        import torchaudio
 
         storage_path = Path(storage_path)
         samples = self.load_audio(**kwargs)
@@ -851,13 +850,14 @@ class Cut:
         if augment_fn is not None:
             samples = augment_fn(samples, self.sampling_rate)
 
-        torchaudio.save(
-            str(storage_path),
-            torch.as_tensor(samples),
-            sample_rate=self.sampling_rate,
+        save_audio(
+            storage_path,
+            samples,
+            sampling_rate=self.sampling_rate,
+            format=format,
             encoding=encoding,
-            bits_per_sample=bits_per_sample,
         )
+
         recording = Recording(
             id=storage_path.stem,
             sampling_rate=self.sampling_rate,

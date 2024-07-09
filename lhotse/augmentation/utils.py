@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import List, Optional
 
 import numpy as np
@@ -100,14 +100,22 @@ class FastRandomRIRGenerator:
             else np.random.default_rng()
         )
 
+    def to_dict(self):
+        return asdict(self)
+
     def __call__(self, nsource: int = 1) -> np.ndarray:
         """
         :param nsource: number of sources (RIR filters) to simulate. Default: 1.
         :return: simulated RIR filter for all sources, shape: (nsource, nsample)
         """
-        from torchaudio.functional import highpass_biquad
+        from lhotse.augmentation.torchaudio import (
+            check_for_torchaudio,
+            get_or_create_resampler,
+        )
 
-        from lhotse.augmentation.torchaudio import get_or_create_resampler
+        check_for_torchaudio()
+
+        from torchaudio.functional import highpass_biquad
 
         # the sample rate at which the original RIR filter is generated
         ratio = 64
