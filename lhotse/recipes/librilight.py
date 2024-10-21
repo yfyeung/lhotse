@@ -17,7 +17,7 @@ import json
 import logging
 import os
 from collections import defaultdict
-from concurrent.futures.thread import ThreadPoolExecutor
+from concurrent.futures.process import ProcessPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
@@ -82,7 +82,7 @@ def _prepare_subset(
     part_path = corpus_dir / subset
     audio_paths = list(part_path.rglob("*.flac"))
 
-    with ThreadPoolExecutor(num_jobs) as ex:
+    with ProcessPoolExecutor(num_jobs) as ex:
         futures = []
         recordings = []
         supervisions = []
