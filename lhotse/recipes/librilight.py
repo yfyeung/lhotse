@@ -21,13 +21,12 @@ from concurrent.futures.thread import ThreadPoolExecutor
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
-from tqdm.auto import tqdm
-
 from lhotse.audio import Recording, RecordingSet
 from lhotse.qa import fix_manifests, validate_recordings_and_supervisions
 from lhotse.recipes.utils import manifests_exist
 from lhotse.supervision import SupervisionSegment, SupervisionSet
-from lhotse.utils import Pathlike, add_durations
+from lhotse.utils import Pathlike
+from tqdm.auto import tqdm
 
 LIBRILIGHT = ("small", "medium", "large")
 
@@ -43,43 +42,29 @@ def _parse_utterance(
     audio_path: Pathlike,
 ) -> Optional[Tuple[Recording, SupervisionSegment]]:
     file_name = str(audio_path).replace(".flac", "").replace(str(corpus_dir) + "/", "")
+    speaker = str(audio_path).split("/")[-3]
     audio_path = audio_path.resolve()
 
     if not audio_path.is_file():
         logging.warning(f"No such file: {audio_path}")
         return None
 
-    audio_info_path = str(audio_path).replace("flac", "json")
-    with open(audio_info_path) as f:
-        audio_infos = json.load(f)
-        speaker = audio_infos["speaker"]
-        vad_infos = audio_infos["voice_activity"]
-
     recording = Recording.from_file(
         path=audio_path,
         recording_id=file_name,
     )
 
-    segments = []
-    segment_seq = 0
-    sampling_rate = 16000
-    for vad_info in vad_infos:
-        segments.append(
-            SupervisionSegment(
-                id=file_name + "_" + str(segment_seq),
-                recording_id=file_name,
-                start=vad_info[0],
-                duration=add_durations(
-                    vad_info[1], -vad_info[0], sampling_rate=sampling_rate
-                ),
-                channel=0,
-                language="English",
-                speaker=speaker,
-            )
-        )
-        segment_seq += 1
+    supervision = SupervisionSegment(
+        id=file_name,
+        recording_id=file_name,
+        start=0,
+        duration=recording.duration,
+        channel=0,
+        language="English",
+        speaker=speaker,
+    )
 
-    return recording, segments
+    return recording, supervision
 
 
 def _prepare_subset(
@@ -108,9 +93,9 @@ def _prepare_subset(
             result = future.result()
             if result is None:
                 continue
-            recording, segments = result
+            recording, supervision = result
             recordings.append(recording)
-            supervisions.extend(segments)
+            supervisions.append(supervision)
 
         recording_set = RecordingSet.from_recordings(recordings)
         supervision_set = SupervisionSet.from_segments(supervisions)
