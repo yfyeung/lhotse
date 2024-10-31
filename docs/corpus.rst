@@ -99,6 +99,8 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_earnings21`
   * - Earnings'22
     - :func:`lhotse.recipes.prepare_earnings22`
+  * - EARS
+    - :func:`lhotse.recipes.prepare_ears`
   * - The Edinburgh International Accents of English Corpus
     - :func:`lhotse.recipes.prepare_edacc`
   * - English Broadcast News 1997
@@ -107,6 +109,8 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_fisher_english`
   * - Fisher Spanish
     - :func:`lhotse.recipes.prepare_fisher_spanish`
+  * - FLEURS
+    - :func:`lhotse.recipes.prepare_fleurs`
   * - Fluent Speech Commands
     - :func:`lhotse.recipes.slu`
   * - GALE Arabic Broadcast Speech
@@ -171,6 +175,10 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_reazonspeech`
   * - RIRs and Noises Corpus (OpenSLR 28)
     - :func:`lhotse.recipes.prepare_rir_noise`
+  * - SBCSAE
+    - :func:`lhotse.recipes.prepare_sbcsae`
+  * - Spatial-LibriSpeech
+    - :func:`lhotse.recipes.prepare_spatial_librispeech`
   * - Speech Commands
     - :func:`lhotse.recipes.prepare_speechcommands`
   * - SpeechIO
@@ -199,8 +207,12 @@ a CLI tool that create the manifests given a corpus directory.
     - :func:`lhotse.recipes.prepare_voxpopuli`
   * - WenetSpeech
     - :func:`lhotse.recipes.prepare_wenet_speech`
+  * - WenetSpeech4TTS
+    - :func:`lhotse.recipes.prepare_wenetspeech4tts`
   * - YesNo
     - :func:`lhotse.recipes.prepare_yesno`
+  * - Emilia
+    - :func:`lhotse.recipes.prepare_emilia`
   * - Eval2000
     - :func:`lhotse.recipes.prepare_eval2000`
   * - MGB2
