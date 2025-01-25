@@ -36,83 +36,14 @@ from lhotse.qa import fix_manifests
 from lhotse.supervision import SupervisionSegment, SupervisionSet
 from lhotse.utils import Pathlike, is_module_available, resumable_download, safe_extract
 
-DEFAULT_COMMONVOICE_URL = (
-    "https://mozilla-common-voice-datasets.s3.dualstack.us-west-2.amazonaws.com"
+COMMONVOICE = (
+    "https://huggingface.co/mozilla-foundation"
 )
 
 
 COMMONVOICE_LANGS = "en de fr cy tt kab ca zh-TW it fa eu es ru tr nl eo zh-CN rw pt zh-HK cs pl uk".split()
 COMMONVOICE_SPLITS = ("train", "dev", "test", "validated", "invalidated", "other")
-COMMONVOICE_DEFAULT_SPLITS = ("test", "dev", "train")
-
-
-def download_commonvoice(
-    target_dir: Pathlike = ".",
-    languages: Union[str, Iterable[str]] = "all",
-    force_download: bool = False,
-    base_url: str = DEFAULT_COMMONVOICE_URL,
-    release: Optional[str] = "cv-corpus-13.0-2023-03-09",
-) -> None:
-    """
-    Download and untar the CommonVoice dataset.
-
-    :param target_dir: Pathlike, the path of the dir to storage the dataset.
-    :param languages: one of: 'all' (downloads all known languages); a single language code (e.g., 'en'),
-        or a list of language codes.
-    :param force_download: Bool, if True, download the tars no matter if the tars exist.
-    :param base_url: str, the base URL for CommonVoice.
-    :param release: str, the name of the CommonVoice release (e.g., "cv-corpus-13.0-2023-03-09").
-        It is used as part of the download URL.
-    """
-    # note(pzelasko): This code should work in general if we supply the right URL,
-    # but the URL stopped working during the development of this script --
-    # I'm not going to fight this, maybe somebody else would be interested to pick it up.
-    target_dir = Path(target_dir)
-    target_dir.mkdir(parents=True, exist_ok=True)
-    url = f"{base_url}/{release}"
-
-    if languages == "all":
-        languages = COMMONVOICE_LANGS
-    elif isinstance(languages, str):
-        languages = [languages]
-    else:
-        languages = list(languages)
-
-    logging.info(
-        f"About to download {len(languages)} CommonVoice languages: {languages}"
-    )
-    for lang in tqdm(languages, desc="Downloading CommonVoice languages"):
-        logging.info(f"Language: {lang}")
-        # Split directory exists and seem valid? Skip this split.
-        part_dir = target_dir / release / lang
-        completed_detector = part_dir / ".completed"
-        if completed_detector.is_file():
-            logging.info(f"Skipping {lang} because {completed_detector} exists.")
-            continue
-        # Maybe-download the archive.
-        tar_name = f"{lang}.tar.gz"
-        tar_path = target_dir / tar_name
-        if force_download or not tar_path.is_file():
-            # After version 7.0, the commonvoice download address has changed
-            if float(release.split("-")[2]) < 8.0:
-                raise NotImplementedError(
-                    "When the version is less than 8.0, CommonVoice requires you to enter e-mail to download the data.\n"
-                    "Please download it manually for now.\n"
-                    "Or you can choose a version greater than 8.0.\n"
-                )
-            else:
-                # https://mozilla-common-voice-datasets.s3.dualstack.us-west-2.amazonaws.com/cv-corpus-13.0-2023-03-09/cv-corpus-13.0-2023-03-09-zh-CN.tar.gz
-                single_url = url + f"/{release}-{lang}.tar.gz"
-            resumable_download(
-                single_url, filename=tar_path, force_download=force_download
-            )
-            logging.info(f"Downloading finished: {lang}")
-        # Remove partial unpacked files, if any, and unpack everything.
-        logging.info(f"Unpacking archive: {lang}")
-        shutil.rmtree(part_dir, ignore_errors=True)
-        with tarfile.open(tar_path) as tar:
-            safe_extract(tar, path=target_dir)
-        completed_detector.touch()
+COMMONVOICE_DEFAULT_SPLITS = ("test", "train")
 
 
 @contextmanager
@@ -148,9 +79,10 @@ def _read_cv_manifests_if_cached(
 def _parse_utterance(
     lang_path: Path,
     language: str,
+    part: str,
     audio_info: str,
 ) -> Optional[Tuple[Recording, SupervisionSegment]]:
-    audio_path = lang_path / "clips" / audio_info["path"]
+    audio_path = lang_path / part / audio_info["path"]
 
     if not audio_path.is_file():
         logging.info(f"No such file: {audio_path}")
@@ -166,14 +98,7 @@ def _parse_utterance(
         duration=recording.duration,
         channel=0,
         language=language,
-        speaker=audio_info["client_id"],
         text=audio_info["sentence"].strip(),
-        gender=audio_info["gender"],
-        custom={
-            "age": audio_info["age"],
-            "accents": audio_info["accents"],
-            "variant": audio_info["variant"],
-        },
     )
     return recording, segment
 
@@ -221,6 +146,7 @@ def _prepare_part(
                             _parse_utterance,
                             lang_path,
                             lang,
+                            part,
                             audio_info,
                         )
                     )
@@ -254,8 +180,8 @@ def prepare_commonvoice(
 
         >>> metadata_path = corpus_dir / language_code / "{train,dev,test}.tsv"
         >>> # e.g. pl_train_metadata_path = "/path/to/cv-corpus-13.0-2023-03-09/pl/train.tsv"
-        >>> audio_path = corpus_dir / language_code / "clips"
-        >>> # e.g. pl_audio_path = "/path/to/cv-corpus-13.0-2023-03-09/pl/clips"
+        >>> audio_path = corpus_dir / language_code / part
+        >>> # e.g. pl_audio_path = "/path/to/cv-corpus-13.0-2023-03-09/pl/part"
 
     Returns a dict with 3-level structure (lang -> split -> manifest-type)::
 
@@ -334,3 +260,12 @@ def prepare_commonvoice(
         manifests[lang] = lang_manifests
 
     return manifests
+
+
+if __name__ == "__main__":
+    prepare_commonvoice(
+        "/scratch/icefall/egs/commonvoice/ASR/download/commonvoice_17.0",
+        "/scratch/icefall/egs/commonvoice/ASR/data/manifests",
+        "th",
+        num_jobs=1,
+    )
