@@ -62,7 +62,7 @@ def _prepare(
     """
     Returns the RecodingSet and SupervisionSet given a dataset part.
     :param corpus_dir: Path to the dataset.
-    :param textgrid_dir: Path to the textgrid directory.
+    :param textgrid_dir: Path to the TextGrid files directory.
     :param language: str of the language of corpus.
     :return: the RecodingSet and SupervisionSet for train and valid.
     """
@@ -106,7 +106,7 @@ def prepare_from_textgrids(
     Returns the manifests which consist of the Recordings and Supervisions
     :param corpus_name: str of the corpus name.
     :param corpus_dir: Path to the dataset.
-    :param textgrid_dir: Path to the textgrid directory.
+    :param textgrid_dir: Path to the TextGrid files directory.
     :param output_dir: Pathlike, the path where to write the manifests.
     :param language: str of the language of corpus.
     :return: a Dict whose key is the dataset part, and the value is Dicts with the keys 'recordings' and 'supervisions'.
@@ -117,7 +117,7 @@ def prepare_from_textgrids(
     textgrid_dir = Path(textgrid_dir)
     assert textgrid_dir.is_dir(), f"No such directory: {textgrid_dir}"
 
-    logging.info("Preparing from textgrid files...")
+    logging.info("Preparing from TextGrid files...")
 
     if output_dir is not None:
         output_dir = Path(output_dir)
@@ -126,14 +126,16 @@ def prepare_from_textgrids(
     manifests = defaultdict(dict)
 
     part = textgrid_dir.stem
-    logging.info(f"Processing textgrid directory: {textgrid_dir}")
+    logging.info(f"Processing TextGrid files directory: {textgrid_dir}")
     if manifests_exist(
         part=part,
         output_dir=output_dir,
         prefix=corpus_name,
         suffix="jsonl.gz",
     ):
-        logging.info(f"textgrid directory: {textgrid_dir} already prepared - skipping.")
+        logging.info(
+            f"TextGrid files directory: {textgrid_dir} already prepared - skipping."
+        )
         return manifests
 
     recording_set, supervision_set = _prepare(
