@@ -159,6 +159,7 @@ install_requires = [
     "tabulate>=0.8.1",
     "torch",
     "tqdm",
+    "textgrid",
 ]
 
 # Workaround for lilcom cmake issue: https://github.com/danpovey/lilcom/issues/41
