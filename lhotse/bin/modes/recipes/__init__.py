@@ -83,6 +83,7 @@ from .tal_asr import *
 from .tal_csasr import *
 from .tedlium import *
 from .tedlium2 import *
+from .textgrids import *
 from .thchs_30 import *
 from .this_american_life import *
 from .timit import *
