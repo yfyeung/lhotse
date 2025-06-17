@@ -89,6 +89,7 @@ from .this_american_life import download_this_american_life, prepare_this_americ
 from .timit import download_timit, prepare_timit
 from .uwb_atcc import download_uwb_atcc, prepare_uwb_atcc
 from .vctk import download_vctk, prepare_vctk
+from .vi2000 import prepare_vi2000
 from .voxceleb import download_voxceleb1, download_voxceleb2, prepare_voxceleb
 from .voxconverse import download_voxconverse, prepare_voxconverse
 from .voxpopuli import download_voxpopuli, prepare_voxpopuli
@@ -222,6 +223,7 @@ __all__ = [
     "prepare_uwb_atcc",
     "download_vctk",
     "prepare_vctk",
+    "prepare_vi2000",
     "download_voxceleb1",
     "download_voxceleb2",
     "prepare_voxceleb",

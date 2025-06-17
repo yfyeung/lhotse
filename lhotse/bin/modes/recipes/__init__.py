@@ -88,6 +88,7 @@ from .this_american_life import *
 from .timit import *
 from .uwb_atcc import *
 from .vctk import *
+from .vi2000 import *
 from .voxceleb import *
 from .voxconverse import *
 from .voxpopuli import *
