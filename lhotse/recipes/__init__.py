@@ -96,6 +96,7 @@ from .wenet_speech import prepare_wenet_speech
 from .wenetspeech4tts import prepare_wenetspeech4tts
 from .xbmu_amdo31 import download_xbmu_amdo31, prepare_xbmu_amdo31
 from .yesno import download_yesno, prepare_yesno
+from .youtube import prepare_youtube
 
 __all__ = [
     "download_adept",
@@ -234,4 +235,5 @@ __all__ = [
     "prepare_xbmu_amdo31",
     "download_yesno",
     "prepare_yesno",
+    "prepare_youtube",
 ]
