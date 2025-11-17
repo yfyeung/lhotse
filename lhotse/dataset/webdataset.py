@@ -48,15 +48,19 @@ Read the documentation of the items below to understand each component better.
                │           └────────┘  └────────┘  └────────┘│
                └─────────────────────────────────────────────┘
 """
+
+import json
 import logging
 import pickle
 import random
 from functools import partial
-from typing import Callable, Dict, Generator, Iterable, List, Optional, Sequence, Union
+from pathlib import Path
+from typing import Callable, Dict, List, Optional, Sequence, Union
 
 import tqdm
 
-from lhotse import CutSet, MonoCut
+from lhotse import CutSet, MonoCut, SupervisionSegment
+from lhotse.audio import Recording
 from lhotse.lazy import LazyIteratorChain
 from lhotse.utils import Pathlike, is_module_available, suppress_and_warn
 
@@ -314,6 +318,7 @@ class LazyWebdatasetIterator:
 
         self.source = source
         self.wds_kwargs = wds_kwargs
+        self._caption_maps = {}
 
     def set_epoch(self, epoch: int) -> None:
         self.wds_kwargs["epoch"] = epoch
@@ -324,6 +329,7 @@ class LazyWebdatasetIterator:
 
         self._ds = mini_webdataset(self.source, **self.wds_kwargs)
         self._ds_iter = iter(self._ds)
+        self._caption_maps = {}
 
     def __getstate__(self) -> dict:
         """
@@ -337,19 +343,87 @@ class LazyWebdatasetIterator:
     def __setstate__(self, state: Dict) -> None:
         """Restore the state when unpickled."""
         self.__dict__.update(state)
+        self._caption_maps = {}
 
     def __iter__(self) -> "LazyWebdatasetIterator":
         self._reset()
         return self
 
-    def __next__(self):
-        from lhotse.serialization import deserialize_item
+    def _get_caption_map(self, shard_url: str) -> Dict[str, str]:
+        if shard_url in self._caption_maps:
+            return self._caption_maps[shard_url]
 
-        data_dict = next(self._ds_iter)
-        data = pickle.loads(data_dict["data"])
-        item = deserialize_item(data)
-        item.shard_origin = data_dict["__url__"]
-        return item
+        logging.info(f"About to load caption for shard: {shard_url}")
+
+        shard_path = Path(shard_url)
+        caption_path = (
+            Path("/private_data/dataset/Emilia-Caption")
+            / shard_path.parent.name
+            / (shard_path.stem + ".jsonl")
+        )
+
+        id2text: Dict[str, str] = {}
+        with caption_path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                try:
+                    obj = json.loads(line)
+                except Exception:
+                    continue
+                cut_id = obj.get("id", None)
+                if cut_id is None:
+                    continue
+                texts = obj.get("text", [])
+                if not texts:
+                    continue
+                id2text[cut_id] = texts[0].strip()
+
+        self._caption_maps[shard_url] = id2text
+        return id2text
+
+    def __next__(self):
+        while True:
+            data_dict = next(self._ds_iter)
+
+            meta = json.loads(data_dict["json"].decode("utf-8"))
+            cut_id = meta["id"]
+
+            shard_url = data_dict["__url__"]
+            id2text = self._get_caption_map(shard_url)
+            if cut_id not in id2text:
+                continue
+            text = id2text[cut_id]
+
+            audio_bytes = data_dict["mp3"]
+
+            recording = Recording.from_bytes(
+                data=audio_bytes,
+                recording_id=cut_id,
+            )
+
+            supervision = SupervisionSegment(
+                id=cut_id,
+                recording_id=cut_id,
+                start=0.0,
+                duration=recording.duration,
+                channel=0,
+                text=text,
+                language=meta.get("language", None),
+                speaker=meta.get("speaker", None),
+            )
+
+            cut = MonoCut(
+                id=cut_id,
+                start=0.0,
+                duration=recording.duration,
+                channel=0,
+                supervisions=[supervision],
+                recording=recording,
+            ).resample(16000)
+
+            cut.shard_origin = data_dict["__url__"]
+
+            return cut
 
     def values(self):
         yield from self
